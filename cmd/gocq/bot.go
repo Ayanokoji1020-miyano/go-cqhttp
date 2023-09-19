@@ -21,26 +21,29 @@ import (
 	"time"
 )
 
-var CQBot = &coolq.CQBot{}
+type CQRobotControl struct {
+	*coolq.CQBot
+}
+
+// NewCQRobotControl 创建 qq 机器人控制实例
+func NewCQRobotControl() *CQRobotControl {
+	return new(CQRobotControl)
+}
 
 func BaseInit() {
 	base.Parse()
 }
 
-func RunQQRobot(QQAccount int64, QQPassword string, protocol int) {
+func (cq *CQRobotControl) RunQQRobot(QQAccount int64, QQPassword string, protocol int) {
 	initAccount(QQAccount, QQPassword)
 
 	if (base.Account.Uin == 0 || (base.Account.Password == "" && !base.Account.Encrypt)) && !global.PathExists("session.token") {
 		log.Warn("账号密码未配置, 将使用二维码登录.")
-		//if !base.FastStart {
-		//	log.Warn("将在 5秒 后继续.")
-		//	time.Sleep(time.Second * 5)
-		//}
 	}
 
 	log.Info("将使用 device.json 内的设备信息运行Bot.")
 	device = new(client.DeviceInfo)
-	if err := device.ReadJson([]byte(DeviceInfo(protocol))); err != nil {
+	if err := device.ReadJson([]byte(deviceInfo(protocol))); err != nil {
 		log.Fatalf("加载设备信息失败: %v", err)
 	}
 
@@ -69,7 +72,7 @@ func RunQQRobot(QQAccount int64, QQPassword string, protocol int) {
 					log.Warnf("请选择: (自动选2)")
 					_ = os.Remove("session.token")
 					log.Infof("缓存已删除.")
-					RunQQRobot(QQAccount, QQPassword, protocol)
+					cq.RunQQRobot(QQAccount, QQPassword, protocol)
 				}
 			}
 			if err = cli.TokenLogin(token); err != nil {
@@ -117,7 +120,7 @@ func RunQQRobot(QQAccount int64, QQPassword string, protocol int) {
 				log.Fatalf("登录时发生致命错误: %v", err)
 			}
 		} else {
-			if err := qrcodeLogin(); err != nil {
+			if err := qrcode(); err != nil {
 				log.Fatalf("登录时发生致命错误: %v", err)
 			}
 		}
@@ -186,8 +189,8 @@ func RunQQRobot(QQAccount int64, QQPassword string, protocol int) {
 	}
 	cli.SetOnlineStatus(allowStatus[base.Account.Status])
 
-	CQBot = coolq.NewQQBot(cli)
-	servers.Run(CQBot)
+	cq.CQBot = coolq.NewQQBot(cli)
+	servers.Run(cq.CQBot)
 }
 
 func initAccount(account int64, password string) {
@@ -213,7 +216,7 @@ func initAccount(account int64, password string) {
 	base.HeartbeatInterval = time.Second * time.Duration(5)
 }
 
-func DeviceInfo(protocol int) string {
+func deviceInfo(protocol int) string {
 	cfg := `{
   "display": "MIRAI.211876.001",
   "product": "mirai",
@@ -338,8 +341,18 @@ func serveFrames(imgByte []byte) {
 
 const TmpQRCodeIMGPath = "./Tmp_QRCode.jpeg"
 
-func QQMessageSend(targetQQ int64, message string) {
-	CQBot.CQSendPrivateMessage(targetQQ, 0, gjson.Result{
+// QQMessageSend 发送消息。
+//
+// targetQQ、targetGroup 为 0 时,不会发送任何消息,
+//
+// targetQQ 不为 0, 发送消息到对应 QQ,
+//
+// targetGroup 不为 0, 发送消息到对应 Group,
+func (cq *CQRobotControl) QQMessageSend(targetQQ, targetGroup int64, message string) {
+	if cq.CQBot == nil {
+		log.Fatalf("请先启动运行机器人, 再发送消息")
+	}
+	cq.CQSendPrivateMessage(targetQQ, targetGroup, gjson.Result{
 		Type: 3,
 		Str:  message,
 	}, false)
