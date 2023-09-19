@@ -15,6 +15,7 @@ import (
 	"github.com/tidwall/gjson"
 	"image"
 	"image/jpeg"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -319,7 +320,7 @@ func serveFrames(imgByte []byte) {
 		log.Fatalln(err)
 	}
 
-	out, _ := os.Create(TmpQRCodeIMGPath)
+	out, _ := os.Create("./QRCode.jpeg")
 	defer out.Close()
 
 	var opts jpeg.Options
@@ -331,9 +332,11 @@ func serveFrames(imgByte []byte) {
 		log.Println(err)
 	}
 
+	in, _ := os.Create(TmpQRCodeIMGPath)
+	_, err = io.Copy(in, out)
 }
 
-const TmpQRCodeIMGPath = "./QRCode.jpeg"
+const TmpQRCodeIMGPath = "./Tmp_QRCode.jpeg"
 
 func QQMessageSend(targetQQ int64, message string) {
 	CQBot.CQSendPrivateMessage(targetQQ, 0, gjson.Result{
