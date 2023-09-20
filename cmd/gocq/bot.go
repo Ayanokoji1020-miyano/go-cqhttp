@@ -268,6 +268,214 @@ const (
 
 const TmpQRCodeIMGPath = "./qrcode.png"
 
+// RunQQRobotWithQRCode 只支持扫码登录
+//
+// sin 需要消耗信号量,才会执行后续操作(异步1)
+func (cq *CQRobotControl) RunQQRobotWithQRCode(sin ScanSingle, QQAccount int64, protocol int) {
+	initAccount(QQAccount, "")
+
+	if (base.Account.Uin == 0 || (base.Account.Password == "" && !base.Account.Encrypt)) && !global.PathExists("session.token") {
+		log.Warn("账号密码未配置, 将使用二维码登录.")
+	}
+
+	log.Info("将使用 device.json 内的设备信息运行Bot.")
+	device = new(client.DeviceInfo)
+	if err := device.ReadJson([]byte(deviceInfo(protocol))); err != nil {
+		log.Fatalf("加载设备信息失败: %v", err)
+	}
+
+	if len(base.Account.Password) > 0 {
+		base.PasswordHash = md5.Sum([]byte(base.Account.Password))
+	}
+
+	cli = newClient()
+	cli.UseDevice(device)
+	isQRCodeLogin := (base.Account.Uin == 0 || len(base.Account.Password) == 0) && !base.Account.Encrypt
+	isTokenLogin := false
+	saveToken := func() {
+		base.AccountToken = cli.GenToken()
+		_ = os.WriteFile("session.token", base.AccountToken, 0o644)
+	}
+	if global.PathExists("session.token") {
+		token, err := os.ReadFile("session.token")
+		if err == nil {
+			if base.Account.Uin != 0 {
+				r := binary.NewReader(token)
+				cu := r.ReadInt64()
+				if cu != base.Account.Uin {
+					log.Warnf("警告: 配置文件内的QQ号 (%v) 与缓存内的QQ号 (%v) 不相同", base.Account.Uin, cu)
+					log.Warnf("1. 使用会话缓存继续.")
+					log.Warnf("2. 删除会话缓存并重启.")
+					log.Warnf("请选择: (自动选2)")
+					_ = os.Remove("session.token")
+					log.Infof("缓存已删除.")
+					cq.RunQQRobotWithQRCode(sin, QQAccount, protocol)
+				}
+			}
+			if err = cli.TokenLogin(token); err != nil {
+				_ = os.Remove("session.token")
+				log.Warnf("恢复会话失败: %v , 尝试使用正常流程登录.", err)
+				cli.Disconnect()
+				cli.Release()
+				cli = newClient()
+				cli.UseDevice(device)
+			} else {
+				isTokenLogin = true
+			}
+		}
+	}
+	if base.Account.Uin != 0 && base.PasswordHash != [16]byte{} {
+		cli.Uin = base.Account.Uin
+		cli.PasswordMd5 = base.PasswordHash
+	}
+	if !base.FastStart {
+		log.Infof("正在检查协议更新...")
+		currentVersionName := device.Protocol.Version().SortVersionName
+		remoteVersion, err := getRemoteLatestProtocolVersion(int(device.Protocol.Version().Protocol))
+		if err == nil {
+			remoteVersionName := gjson.GetBytes(remoteVersion, "sort_version_name").String()
+			if remoteVersionName != currentVersionName {
+				switch {
+				case !base.UpdateProtocol:
+					log.Infof("检测到协议更新: %s -> %s", currentVersionName, remoteVersionName)
+					log.Infof("如果登录时出现版本过低错误, 可尝试使用 -update-protocol 参数启动")
+				case !isTokenLogin:
+					_ = device.Protocol.Version().UpdateFromJson(remoteVersion)
+					log.Infof("协议版本已更新: %s -> %s", currentVersionName, remoteVersionName)
+				default:
+					log.Infof("检测到协议更新: %s -> %s", currentVersionName, remoteVersionName)
+					log.Infof("由于使用了会话缓存, 无法自动更新协议, 请删除缓存后重试")
+				}
+			}
+		} else if err.Error() != "remote version unavailable" {
+			log.Warnf("检查协议更新失败: %v", err)
+		}
+	}
+	if !isTokenLogin && isQRCodeLogin {
+		if err := qrcodeLoginWithSingle(sin); err != nil {
+			log.Fatalf("登录时发生致命错误: %v", err)
+		}
+	}
+	var times uint = 1 // 重试次数
+	var reLoginLock sync.Mutex
+	cli.DisconnectedEvent.Subscribe(func(q *client.QQClient, e *client.ClientDisconnectedEvent) {
+		reLoginLock.Lock()
+		defer reLoginLock.Unlock()
+		times = 1
+		if cli.Online.Load() {
+			return
+		}
+		log.Warnf("Bot已离线: %v", e.Message)
+		time.Sleep(time.Second * time.Duration(base.Reconnect.Delay))
+		for {
+			if base.Reconnect.Disabled {
+				log.Warnf("未启用自动重连, 将退出.")
+				os.Exit(1)
+			}
+			if times > base.Reconnect.MaxTimes && base.Reconnect.MaxTimes != 0 {
+				log.Fatalf("Bot重连次数超过限制, 停止")
+			}
+			times++
+			if base.Reconnect.Interval > 0 {
+				log.Warnf("将在 %v 秒后尝试重连. 重连次数：%v/%v", base.Reconnect.Interval, times, base.Reconnect.MaxTimes)
+				time.Sleep(time.Second * time.Duration(base.Reconnect.Interval))
+			} else {
+				time.Sleep(time.Second)
+			}
+			if cli.Online.Load() {
+				log.Infof("登录已完成")
+				break
+			}
+			log.Warnf("尝试重连...")
+			err := cli.TokenLogin(base.AccountToken)
+			if err == nil {
+				saveToken()
+				return
+			}
+			log.Warnf("快速重连失败: %v", err)
+			if isQRCodeLogin {
+				log.Fatalf("快速重连失败, 扫码登录无法恢复会话.")
+			}
+			log.Warnf("快速重连失败, 尝试普通登录. 这可能是因为其他端强行T下线导致的.")
+			time.Sleep(time.Second)
+			if err := commonLogin(); err != nil {
+				log.Errorf("登录时发生致命错误: %v", err)
+			} else {
+				saveToken()
+				break
+			}
+		}
+	})
+	saveToken()
+	cli.AllowSlider = true
+	log.Infof("登录成功 欢迎使用: %v", cli.Nickname)
+	log.Info("开始加载好友列表...")
+	global.Check(cli.ReloadFriendList(), true)
+	log.Infof("共加载 %v 个好友.", len(cli.FriendList))
+	log.Infof("开始加载群列表...")
+	global.Check(cli.ReloadGroupList(), true)
+	log.Infof("共加载 %v 个群.", len(cli.GroupList))
+	if uint(base.Account.Status) >= uint(len(allowStatus)) {
+		base.Account.Status = 0
+	}
+	cli.SetOnlineStatus(allowStatus[base.Account.Status])
+
+	cq.Client = cli
+	cq.CQBot = coolq.NewQQBot(cli)
+	servers.Run(cq.CQBot)
+}
+
+type ScanSingle = chan struct{}
+
+func qrcodeLoginWithSingle(sin ScanSingle) error {
+	rsp, err := cli.FetchQRCodeCustomSize(1, 2, 1)
+	if err != nil {
+		return err
+	}
+	_ = os.WriteFile("qrcode.png", rsp.ImageData, 0o644)
+	defer func() { _ = os.Remove("qrcode.png") }()
+	if cli.Uin != 0 {
+		log.Infof("请使用账号 %v 登录手机QQ扫描二维码 (qrcode.png) : ", cli.Uin)
+	} else {
+		log.Infof("请使用手机QQ扫描二维码 (qrcode.png) : ")
+	}
+	time.Sleep(time.Second)
+	printQRCode(rsp.ImageData)
+	s, err := cli.QueryQRCodeStatus(rsp.Sig)
+	if err != nil {
+		return err
+	}
+	prevState := s.State
+	sin <- struct{}{}
+	for {
+		time.Sleep(time.Second)
+		s, _ = cli.QueryQRCodeStatus(rsp.Sig)
+		if s == nil {
+			continue
+		}
+		if prevState == s.State {
+			continue
+		}
+		prevState = s.State
+		switch s.State {
+		case client.QRCodeCanceled:
+			log.Fatalf("扫码被用户取消.")
+		case client.QRCodeTimeout:
+			log.Fatalf("二维码过期")
+		case client.QRCodeWaitingForConfirm:
+			log.Infof("扫码成功, 请在手机端确认登录.")
+		case client.QRCodeConfirmed:
+			res, err := cli.QRCodeLogin(s.LoginInfo)
+			if err != nil {
+				return err
+			}
+			return loginResponseProcessor(res)
+		case client.QRCodeImageFetch, client.QRCodeWaitingForScan:
+			// ignore
+		}
+	}
+}
+
 // QQMessageSend 发送消息。
 //
 // targetQQ、targetGroup 为 0 时,不会发送任何消息,
