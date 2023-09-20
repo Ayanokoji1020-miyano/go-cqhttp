@@ -2,6 +2,7 @@ package gocq
 
 import (
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"github.com/Mrs4s/MiraiGo/binary"
 	"github.com/Mrs4s/MiraiGo/client"
@@ -18,6 +19,7 @@ import (
 )
 
 type CQRobotControl struct {
+	*client.QQClient
 	*coolq.CQBot
 }
 
@@ -185,6 +187,7 @@ func (cq *CQRobotControl) RunQQRobot(QQAccount int64, QQPassword string, protoco
 	}
 	cli.SetOnlineStatus(allowStatus[base.Account.Status])
 
+	cq.Client = cli
 	cq.CQBot = coolq.NewQQBot(cli)
 	servers.Run(cq.CQBot)
 }
@@ -280,4 +283,21 @@ func (cq *CQRobotControl) QQMessageSend(targetQQ, targetGroup int64, message str
 		Type: 3,
 		Str:  message,
 	}, false)
+}
+
+// IFRobotOnline QQ机器人是否在线
+func (cq *CQRobotControl) IFRobotOnline() (bool, error) {
+	if !global.PathExists("session.token") {
+		return false, errors.New("未找到 session.token 文件")
+	}
+
+	token, err := os.ReadFile("session.token")
+	if err != nil {
+		return false, err
+	}
+
+	if err = cli.TokenLogin(token); err != nil {
+		return false, err
+	}
+	return true, nil
 }
