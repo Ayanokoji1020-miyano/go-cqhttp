@@ -25,7 +25,10 @@ type CQRobotControl struct {
 
 // NewCQRobotControl 创建 qq 机器人控制实例
 func NewCQRobotControl() *CQRobotControl {
-	return new(CQRobotControl)
+	return &CQRobotControl{
+		QQClient: new(client.QQClient),
+		CQBot:    new(coolq.CQBot),
+	}
 }
 
 func BaseInit() {
@@ -266,7 +269,7 @@ const (
 	ProtocolAPad    = 6 // QQ登录方式(aPad)
 )
 
-const TmpQRCodeIMGPath = "./qrcode.png"
+const TmpQRCodeIMGPath = "./upload/base-open/qrcode.png"
 
 // RunQQRobotWithQRCode 只支持扫码登录
 //
@@ -432,7 +435,7 @@ func qrcodeLoginWithSingle(sin ScanSingle) error {
 	if err != nil {
 		return err
 	}
-	_ = os.WriteFile("qrcode.png", rsp.ImageData, 0o644)
+	_ = os.WriteFile(TmpQRCodeIMGPath, rsp.ImageData, 0o644)
 	defer func() { _ = os.Remove("qrcode.png") }()
 	if cli.Uin != 0 {
 		log.Infof("请使用账号 %v 登录手机QQ扫描二维码 (qrcode.png) : ", cli.Uin)
