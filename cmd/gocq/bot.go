@@ -465,9 +465,9 @@ func qrcodeLoginWithSingle(sin ScanSingle) error {
 		prevState = s.State
 		switch s.State {
 		case client.QRCodeCanceled:
-			log.Fatalf("扫码被用户取消.")
+			log.Infof("扫码被用户取消.")
 		case client.QRCodeTimeout:
-			log.Fatalf("二维码过期")
+			log.Infof("二维码过期")
 		case client.QRCodeWaitingForConfirm:
 			log.Infof("扫码成功, 请在手机端确认登录.")
 		case client.QRCodeConfirmed:
