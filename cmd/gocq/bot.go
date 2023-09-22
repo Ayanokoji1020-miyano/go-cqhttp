@@ -275,6 +275,7 @@ const TmpQRCodeIMGPath = "./upload/base-open/qrcode.png"
 //
 // sin 需要消耗信号量,才会执行后续操作(异步1)
 func (cq *CQRobotControl) RunQQRobotWithQRCode(sin ScanSingle, QQAccount int64, protocol int) {
+	defer func() { close(sin) }()
 	initAccount(QQAccount, "")
 
 	if (base.Account.Uin == 0 || (base.Account.Password == "" && !base.Account.Encrypt)) && !global.PathExists("session.token") {
@@ -450,6 +451,7 @@ func qrcodeLoginWithSingle(sin ScanSingle) error {
 	}
 	prevState := s.State
 	sin <- struct{}{}
+
 	for {
 		time.Sleep(time.Second)
 		s, _ = cli.QueryQRCodeStatus(rsp.Sig)
