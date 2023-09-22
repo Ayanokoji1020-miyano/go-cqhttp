@@ -285,7 +285,8 @@ func (cq *CQRobotControl) RunQQRobotWithQRCode(sin ScanSingle, QQAccount int64, 
 	log.Info("将使用 device.json 内的设备信息运行Bot.")
 	device = new(client.DeviceInfo)
 	if err := device.ReadJson([]byte(deviceInfo(protocol))); err != nil {
-		log.Fatalf("加载设备信息失败: %v", err)
+		log.Infof("加载设备信息失败: %v", err)
+		return
 	}
 
 	if len(base.Account.Password) > 0 {
@@ -357,7 +358,8 @@ func (cq *CQRobotControl) RunQQRobotWithQRCode(sin ScanSingle, QQAccount int64, 
 	}
 	if !isTokenLogin && isQRCodeLogin {
 		if err := qrcodeLoginWithSingle(sin); err != nil {
-			log.Fatalf("登录时发生致命错误: %v", err)
+			log.Infof("登录时: %v", err)
+			return
 		}
 	}
 	var times uint = 1 // 重试次数
@@ -377,7 +379,8 @@ func (cq *CQRobotControl) RunQQRobotWithQRCode(sin ScanSingle, QQAccount int64, 
 				os.Exit(1)
 			}
 			if times > base.Reconnect.MaxTimes && base.Reconnect.MaxTimes != 0 {
-				log.Fatalf("Bot重连次数超过限制, 停止")
+				log.Info("Bot重连次数超过限制, 停止")
+				return
 			}
 			times++
 			if base.Reconnect.Interval > 0 {
@@ -468,6 +471,7 @@ func qrcodeLoginWithSingle(sin ScanSingle) error {
 			log.Infof("扫码被用户取消.")
 		case client.QRCodeTimeout:
 			log.Infof("二维码过期")
+			return errors.New("二维码过期")
 		case client.QRCodeWaitingForConfirm:
 			log.Infof("扫码成功, 请在手机端确认登录.")
 		case client.QRCodeConfirmed:
