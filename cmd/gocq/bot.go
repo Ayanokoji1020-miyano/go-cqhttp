@@ -427,6 +427,7 @@ func (cq *CQRobotControl) RunQQRobotWithQRCode(sin ScanSingle, QQAccount int64, 
 	cq.Client = cli
 	cq.CQBot = coolq.NewQQBot(cli)
 	servers.Run(cq.CQBot)
+	sin <- struct{}{}
 }
 
 type ScanSingle = chan struct{}
