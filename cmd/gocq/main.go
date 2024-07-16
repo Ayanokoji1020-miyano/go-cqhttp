@@ -163,32 +163,27 @@ func LoginInteract() {
 			log.Fatalf("加载设备信息失败: %v", err)
 		}
 	}
-
-	if base.SignServer != "-" && base.SignServer != "" {
-		log.Infof("使用服务器 %s 进行数据包签名", base.SignServer)
-		if base.SignServerBearer != "-" && base.SignServerBearer != "" {
-			log.Infof("使用 Bearer %s 认证签名服务器 %s ", base.SignServerBearer, base.SignServer)
-		}
-		// 等待签名服务器直到连接成功
-		if !signWaitServer() {
-			log.Fatalf("连接签名服务器失败")
-		}
-		signRegister(base.Account.Uin, device.AndroidId, device.Guid, device.QImei36, base.Key)
+	signServer, err := getAvaliableSignServer() // 获取可用签名服务器
+	if err != nil {
+		log.Warn(err)
+	}
+	if signServer != nil && len(signServer.URL) > 1 {
+		log.Infof("使用签名服务器：%v", signServer.URL)
 		go signStartRefreshToken(base.Account.RefreshInterval) // 定时刷新 token
 		wrapper.DandelionEnergy = energy
 		wrapper.FekitGetSign = sign
 		if !base.IsBelow110 {
 			if !base.Account.AutoRegister {
-				log.Warn("自动注册实例已关闭，若未配置 sign-server 端自动注册实例则实例丢失时需要重启 go-cqhttp 以正常签名")
+				log.Warn("自动注册实例已关闭，请配置 sign-server 端自动注册实例以保持正常签名")
 			}
 			if !base.Account.AutoRefreshToken {
-				log.Warn("自动刷新 token 已关闭，token 过期后获取签名时将不会立即尝试刷新获取新 token")
+				log.Info("自动刷新 token 已关闭，token 过期后获取签名时将不会立即尝试刷新获取新 token")
 			}
 		} else {
 			log.Warn("签名服务器版本 <= 1.1.0 ，无法使用刷新 token 等操作，建议使用 1.1.6 版本及以上签名服务器")
 		}
 	} else {
-		log.Warnf("警告: 未配置签名服务器, 这可能会导致登录 45 错误码或发送消息被风控")
+		log.Warnf("警告: 未配置签名服务器或签名服务器不可用, 这可能会导致登录 45 错误码或发送消息被风控")
 	}
 
 	if base.Account.Encrypt {
@@ -260,8 +255,14 @@ func LoginInteract() {
 	versionFile := path.Join(global.VersionsPath, fmt.Sprint(int(cli.Device().Protocol))+".json")
 	if global.PathExists(versionFile) {
 		b, err := os.ReadFile(versionFile)
-		if err == nil {
-			_ = cli.Device().Protocol.Version().UpdateFromJson(b)
+		if err != nil {
+			log.Warnf("从文件 %s 读取本地版本信息文件出错.", versionFile)
+			os.Exit(0)
+		}
+		err = cli.Device().Protocol.Version().UpdateFromJson(b)
+		if err != nil {
+			log.Warnf("从文件 %s 解析本地版本信息出错: %v", versionFile, err)
+			os.Exit(0)
 		}
 		log.Infof("从文件 %s 读取协议版本 %v.", versionFile, cli.Device().Protocol.Version())
 	}
@@ -320,7 +321,11 @@ func LoginInteract() {
 					log.Infof("如果登录时出现版本过低错误, 可尝试使用 -update-protocol 参数启动")
 				case !isTokenLogin:
 					_ = device.Protocol.Version().UpdateFromJson(remoteVersion)
+					err := os.WriteFile(versionFile, remoteVersion, 0644)
 					log.Infof("协议版本已更新: %s -> %s", currentVersionName, remoteVersionName)
+					if err != nil {
+						log.Warnln("更新协议版本缓存文件", versionFile, "失败:", err)
+					}
 				default:
 					log.Infof("检测到协议更新: %s -> %s", currentVersionName, remoteVersionName)
 					log.Infof("由于使用了会话缓存, 无法自动更新协议, 请删除缓存后重试")
@@ -343,7 +348,7 @@ func LoginInteract() {
 	}
 	var times uint = 1 // 重试次数
 	var reLoginLock sync.Mutex
-	cli.DisconnectedEvent.Subscribe(func(q *client.QQClient, e *client.ClientDisconnectedEvent) {
+	cli.DisconnectedEvent.Subscribe(func(_ *client.QQClient, e *client.ClientDisconnectedEvent) {
 		reLoginLock.Lock()
 		defer reLoginLock.Unlock()
 		times = 1
@@ -456,7 +461,7 @@ func PasswordHashDecrypt(encryptedPasswordHash string, key []byte) ([]byte, erro
 func newClient() *client.QQClient {
 	c := client.NewClientEmpty()
 	c.UseFragmentMessage = base.ForceFragmented
-	c.OnServerUpdated(func(bot *client.QQClient, e *client.ServerUpdatedEvent) bool {
+	c.OnServerUpdated(func(_ *client.QQClient, _ *client.ServerUpdatedEvent) bool {
 		if !base.UseSSOAddress {
 			log.Infof("收到服务器地址更新通知, 根据配置文件已忽略.")
 			return false
@@ -488,7 +493,7 @@ func getRemoteLatestProtocolVersion(protocolType int) ([]byte, error) {
 	}
 	response, err := download.Request{URL: url}.Bytes()
 	if err != nil {
-		return download.Request{URL: "https://ghproxy.com/" + url}.Bytes()
+		return download.Request{URL: "https://mirror.ghproxy.com/" + url}.Bytes()
 	}
 	return response, nil
 }
